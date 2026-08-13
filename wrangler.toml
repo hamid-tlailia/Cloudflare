@@ -1,0 +1,19 @@
+name = "majlis"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+# غرفة واحدة = كائن دائم واحد
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+# SQLite مطلوب لتعمل الكائنات الدائمة على الخطة المجانية
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[vars]
+ALLOWED_ORIGINS = "*"
+# TURN_URL  = "turn:example.com:3478"
+# TURN_USER = ""
+# TURN_PASS = ""
