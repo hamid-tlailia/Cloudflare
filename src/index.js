@@ -58,7 +58,7 @@ export default {
     /* قناة اللعب: كل رمز يذهب إلى كائنه الدائم */
     if (url.pathname === '/ws') {
       const code = (url.searchParams.get('code') || '').toUpperCase();
-      if (!/^[A-Z0-9]{4,6}$/.test(code)) return new Response('bad code', { status: 400 });
+      if (!/^[A-Z0-9]{4,6}$/.test(code) && code !== 'LOBBY') return new Response('bad code', { status: 400 });
       const id = env.ROOM.idFromName(code);
       return env.ROOM.get(id).fetch(req);
     }
@@ -104,7 +104,7 @@ export class Room {
     return {
       code: this.code, game: m.game, hostId: m.hostId, started: m.started,
       players: Object.values(m.players).map(p => ({
-        id: p.id, name: p.name, seat: p.seat, online: p.online,
+        id: p.id, name: p.name, seat: p.seat, online: p.online, status: p.status || 'free',
         voice: p.voice, ping: p.ping, isHost: p.id === m.hostId
       }))
     };
@@ -113,7 +113,8 @@ export class Room {
 
   freeSeat() {
     const taken = new Set(Object.values(this.mem.players).map(p => p.seat));
-    for (let i = 0; i < MAX_ROOM; i++) if (!taken.has(i)) return i;
+    const cap = this.code === 'LOBBY' ? 64 : MAX_ROOM;
+    for (let i = 0; i < cap; i++) if (!taken.has(i)) return i;
     return -1;
   }
   reassignHost() {
@@ -174,8 +175,8 @@ export class Room {
           this.pushRoom();
           break;
         }
-        if (!mm.hostId) { this.send(ws, { t: 'err', code: 'no_room' }); break; }
-        if (Object.keys(mm.players).length >= MAX_ROOM) { this.send(ws, { t: 'err', code: 'full' }); break; }
+        if (!mm.hostId && this.code !== 'LOBBY') { this.send(ws, { t: 'err', code: 'no_room' }); break; }
+        if (this.code !== 'LOBBY' && Object.keys(mm.players).length >= MAX_ROOM) { this.send(ws, { t: 'err', code: 'full' }); break; }
         const seat = this.freeSeat();
         if (seat < 0) { this.send(ws, { t: 'err', code: 'full' }); break; }
         const id = crypto.randomUUID();
@@ -209,6 +210,26 @@ export class Room {
         await this.save();
         this.broadcast({ t: 'game', game: m.game });
         this.pushRoom();
+        break;
+      }
+
+      case 'invite': {
+        if (!me) break;
+        const tgt = this.socketOf(m.to);
+        if (!tgt) { this.send(ws, { t: 'err', code: 'gone' }); break; }
+        this.send(tgt, { t: 'invite', from: me.id, name: me.name, code: m.code, game: m.game });
+        break;
+      }
+      case 'inviteReply': {
+        if (!me) break;
+        const tgt = this.socketOf(m.to);
+        if (tgt) this.send(tgt, { t: 'inviteReply', from: me.id, name: me.name, ok: !!m.ok });
+        break;
+      }
+      case 'status': {
+        if (!me) break;
+        me.status = String(m.s || 'free').slice(0, 8);
+        await this.save(); this.pushRoom();
         break;
       }
 
@@ -291,7 +312,7 @@ export class Room {
 
 function mkPlayer(id, name, seat) {
   return {
-    id, seat, online: true, voice: false, ping: null,
+    id, seat, online: true, voice: false, ping: null, status: 'free',
     name: String(name || 'ضيف').slice(0, 18),
     joinedAt: Date.now(), leftAt: null
   };
