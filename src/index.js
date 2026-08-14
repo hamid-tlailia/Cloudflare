@@ -279,6 +279,11 @@ export class Room {
     const a = this.meta(ws);
     const p = a.id ? this.mem.players[a.id] : null;
     if (!p) return;
+    if (this.code === 'LOBBY') {           // الردهة: لا مهلة انتظار
+      delete this.mem.players[p.id];
+      await this.save(); this.pushRoom();
+      return;
+    }
     p.online = false; p.leftAt = Date.now();
     await this.save();
     this.broadcast({ t: 'sys', code: 'disconnected', name: p.name, id: p.id });
