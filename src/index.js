@@ -177,6 +177,11 @@ export class Room {
         }
         if (!mm.hostId && this.code !== 'LOBBY') { this.send(ws, { t: 'err', code: 'no_room' }); break; }
         if (this.code !== 'LOBBY' && Object.keys(mm.players).length >= MAX_ROOM) { this.send(ws, { t: 'err', code: 'full' }); break; }
+        if (this.code === 'LOBBY') {               // نفس الاسم يستبدل الجلسة القديمة فوراً
+          for (const pid of Object.keys(mm.players)) {
+            if (mm.players[pid].name === String(m.name || '').slice(0, 18)) delete mm.players[pid];
+          }
+        }
         const seat = this.freeSeat();
         if (seat < 0) { this.send(ws, { t: 'err', code: 'full' }); break; }
         const id = crypto.randomUUID();
