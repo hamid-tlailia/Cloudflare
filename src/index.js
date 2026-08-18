@@ -145,7 +145,9 @@ export class Room {
       const m = await this.load();
       const exclude = url.searchParams.get('exclude') || '';
       const players = Object.values(m.players);
-      const waiting = players.some(p => p.id !== exclude && p.online);
+      /* الاعتماد على القناة الحية أيضاً يمنع فقدان لاعب ينتظر إذا تأخر حفظ online. */
+      const liveIds = new Set(this.sockets().map(ws => this.meta(ws).id).filter(Boolean));
+      const waiting = players.some(p => p.id !== exclude && (p.online || liveIds.has(p.id)));
       if (url.searchParams.get('drop') === '1' && !waiting) {
         for (const p of players) if (p.id === exclude || !p.online) delete m.players[p.id];
         if (!Object.keys(m.players).length) { await this.state.storage.deleteAll(); this.mem = null; return Response.json({ exists: false, waiting: false }); }
