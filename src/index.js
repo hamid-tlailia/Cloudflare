@@ -55,6 +55,19 @@ export default {
     /* رمز غرفة جديد */
     if (url.pathname === '/new') return json({ code: code5() }, env, req);
 
+    /* فحص غرفة سابقة: لا نعيد عرضها إلا إن كان فيها لاعب آخر متصل. */
+    if (url.pathname === '/room') {
+      const code = (url.searchParams.get('code') || '').toUpperCase();
+      if (!/^[A-Z0-9]{4,6}$/.test(code) || code === 'LOBBY') return json({ exists: false, waiting: false }, env, req, 404);
+      const qs = new URLSearchParams({ code });
+      const exclude = url.searchParams.get('exclude');
+      if (exclude) qs.set('exclude', exclude);
+      if (url.searchParams.get('drop') === '1') qs.set('drop', '1');
+      const probe = new Request(`https://room.internal/room-info?${qs}`);
+      const out = await env.ROOM.get(env.ROOM.idFromName(code)).fetch(probe);
+      return new Response(await out.text(), { status: out.status, headers: cors(env, req, { 'content-type': 'application/json; charset=utf-8' }) });
+    }
+
     /* قناة اللعب: كل رمز يذهب إلى كائنه الدائم */
     if (url.pathname === '/ws') {
       const code = (url.searchParams.get('code') || '').toUpperCase();
@@ -127,6 +140,19 @@ export class Room {
   /* ---- الترقية إلى WebSocket ---- */
   async fetch(req) {
     const url = new URL(req.url);
+    if (url.pathname === '/room-info') {
+      this.code = (url.searchParams.get('code') || '').toUpperCase() || await this.state.storage.get('code');
+      const m = await this.load();
+      const exclude = url.searchParams.get('exclude') || '';
+      const players = Object.values(m.players);
+      const waiting = players.some(p => p.id !== exclude && p.online);
+      if (url.searchParams.get('drop') === '1' && !waiting) {
+        for (const p of players) if (p.id === exclude || !p.online) delete m.players[p.id];
+        if (!Object.keys(m.players).length) { await this.state.storage.deleteAll(); this.mem = null; return Response.json({ exists: false, waiting: false }); }
+        await this.save();
+      }
+      return Response.json({ exists: !!m.hostId, waiting });
+    }
     this.code = (url.searchParams.get('code') || '').toUpperCase();
     await this.state.storage.put('code', this.code);
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('expected websocket', { status: 426 });
@@ -270,6 +296,11 @@ export class Room {
       case 'leave': {
         if (!me) break;
         delete mm.players[me.id];
+        if (this.code !== 'LOBBY' && !Object.keys(mm.players).length) {
+          await this.state.storage.deleteAll(); this.mem = null;
+          try { ws.close(1000, 'left'); } catch {}
+          break;
+        }
         await this.save();
         this.broadcast({ t: 'sys', code: 'left', name: me.name }, me.id);
         this.reassignHost(); this.pushRoom(me.id);
