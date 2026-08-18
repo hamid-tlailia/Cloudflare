@@ -109,7 +109,7 @@ export class Room {
       }))
     };
   }
-  pushRoom() { this.broadcast({ t: 'room', room: this.pub() }); }
+  pushRoom(exceptId = null) { this.broadcast({ t: 'room', room: this.pub() }, exceptId); }
 
   freeSeat() {
     const taken = new Set(Object.values(this.mem.players).map(p => p.seat));
@@ -271,8 +271,8 @@ export class Room {
         if (!me) break;
         delete mm.players[me.id];
         await this.save();
-        this.broadcast({ t: 'sys', code: 'left', name: me.name });
-        this.reassignHost(); this.pushRoom();
+        this.broadcast({ t: 'sys', code: 'left', name: me.name }, me.id);
+        this.reassignHost(); this.pushRoom(me.id);
         try { ws.close(1000, 'left'); } catch {}
         break;
       }
