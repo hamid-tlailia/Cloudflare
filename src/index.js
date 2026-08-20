@@ -60,7 +60,10 @@ export default {
       const code = (url.searchParams.get('code') || '').toUpperCase();
       if (!/^[A-Z0-9]{4,6}$/.test(code)) return json({ exists: false }, env, req);
       const id = env.ROOM.idFromName(code);
-      return env.ROOM.get(id).fetch(new Request(req.url.replace('/peek', '/peek-internal'), req));
+      const r = await env.ROOM.get(id).fetch(new Request(req.url.replace('/peek', '/peek-internal'), req));
+      /* الكائن الدائم لا يضيف ترويسات CORS — نغلّف الردّ بها وإلا رفضه المتصفح */
+      let data; try { data = await r.json(); } catch { data = { exists: false }; }
+      return json(data, env, req);
     }
 
     /* قناة اللعب: كل رمز يذهب إلى كائنه الدائم */
