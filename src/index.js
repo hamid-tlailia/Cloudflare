@@ -55,17 +55,12 @@ export default {
     /* رمز غرفة جديد */
     if (url.pathname === '/new') return json({ code: code5() }, env, req);
 
-    /* فحص غرفة سابقة: لا نعيد عرضها إلا إن كان فيها لاعب آخر متصل. */
-    if (url.pathname === '/room') {
+    /* استطلاع غرفة بلا انضمام فعلي — لمعرفة إن كان أحد لا يزال ينتظر */
+    if (url.pathname === '/peek') {
       const code = (url.searchParams.get('code') || '').toUpperCase();
-      if (!/^[A-Z0-9]{4,6}$/.test(code) || code === 'LOBBY') return json({ exists: false, waiting: false }, env, req, 404);
-      const qs = new URLSearchParams({ code });
-      const exclude = url.searchParams.get('exclude');
-      if (exclude) qs.set('exclude', exclude);
-      if (url.searchParams.get('drop') === '1') qs.set('drop', '1');
-      const probe = new Request(`https://room.internal/room-info?${qs}`);
-      const out = await env.ROOM.get(env.ROOM.idFromName(code)).fetch(probe);
-      return new Response(await out.text(), { status: out.status, headers: cors(env, req, { 'content-type': 'application/json; charset=utf-8' }) });
+      if (!/^[A-Z0-9]{4,6}$/.test(code)) return json({ exists: false }, env, req);
+      const id = env.ROOM.idFromName(code);
+      return env.ROOM.get(id).fetch(new Request(req.url.replace('/peek', '/peek-internal'), req));
     }
 
     /* قناة اللعب: كل رمز يذهب إلى كائنه الدائم */
@@ -122,7 +117,7 @@ export class Room {
       }))
     };
   }
-  pushRoom(exceptId = null) { this.broadcast({ t: 'room', room: this.pub() }, exceptId); }
+  pushRoom() { this.broadcast({ t: 'room', room: this.pub() }); }
 
   freeSeat() {
     const taken = new Set(Object.values(this.mem.players).map(p => p.seat));
@@ -140,23 +135,19 @@ export class Room {
   /* ---- الترقية إلى WebSocket ---- */
   async fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === '/room-info') {
-      this.code = (url.searchParams.get('code') || '').toUpperCase() || await this.state.storage.get('code');
-      const m = await this.load();
-      const exclude = url.searchParams.get('exclude') || '';
-      const players = Object.values(m.players);
-      /* الاعتماد على القناة الحية أيضاً يمنع فقدان لاعب ينتظر إذا تأخر حفظ online. */
-      const liveIds = new Set(this.sockets().map(ws => this.meta(ws).id).filter(Boolean));
-      const waiting = players.some(p => p.id !== exclude && (p.online || liveIds.has(p.id)));
-      if (url.searchParams.get('drop') === '1' && !waiting) {
-        for (const p of players) if (p.id === exclude || !p.online) delete m.players[p.id];
-        if (!Object.keys(m.players).length) { await this.state.storage.deleteAll(); this.mem = null; return Response.json({ exists: false, waiting: false }); }
-        await this.save();
-      }
-      return Response.json({ exists: !!m.hostId, waiting });
-    }
     this.code = (url.searchParams.get('code') || '').toUpperCase();
     await this.state.storage.put('code', this.code);
+
+    /* استطلاع للحالة بلا فتح اتصال — يستعمله العميل ليعرف إن كان أحد لا يزال ينتظر */
+    if (url.pathname === '/peek-internal') {
+      await this.load();
+      const players = Object.values(this.mem.players).map(p => ({ name: p.name, online: p.online }));
+      const body = players.length
+        ? { exists: true, game: this.mem.game, players }
+        : { exists: false };
+      return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json; charset=utf-8' } });
+    }
+
     if (req.headers.get('Upgrade') !== 'websocket') return new Response('expected websocket', { status: 426 });
 
     const pair = new WebSocketPair();
@@ -298,14 +289,9 @@ export class Room {
       case 'leave': {
         if (!me) break;
         delete mm.players[me.id];
-        if (this.code !== 'LOBBY' && !Object.keys(mm.players).length) {
-          await this.state.storage.deleteAll(); this.mem = null;
-          try { ws.close(1000, 'left'); } catch {}
-          break;
-        }
         await this.save();
-        this.broadcast({ t: 'sys', code: 'left', name: me.name }, me.id);
-        this.reassignHost(); this.pushRoom(me.id);
+        this.broadcast({ t: 'sys', code: 'left', name: me.name });
+        this.reassignHost(); this.pushRoom();
         try { ws.close(1000, 'left'); } catch {}
         break;
       }
